@@ -1,0 +1,38 @@
+# =============================================================================
+# 4축 로봇 동역학 모델 — ※ 예시(TODO) ※
+#   관절 3, 4 의 실제 배치를 모르는 상태에서 만든 "평면 팔꿈치 + 손목" 예시입니다.
+#   실제 DH 와 치수로 반드시 바꾸세요. (형식 설명은 model_2dof.yaml 참고)
+#
+#   가정한 구조
+#     관절1: 전역 z (허리)          관절2: 수평 (어깨)
+#     관절3: 관절2와 평행 (팔꿈치)   관절4: 관절3과 평행 (손목 pitch)
+#
+#   ※ 2축일 때는 a2 = 0 이었지만, 관절 3 이 생기면 frame 2 를 관절3 위치로
+#     옮기는 게 일반적입니다 → a2 = 링크2 길이.
+#     이때 링크2 프로파일은 frame 2 원점에서 "-x" 방향으로 뻗어 있습니다.
+# =============================================================================
+gravity: [0.0, 0.0, -9.81]
+
+joints:
+  - name: joint1
+    dh: {theta_offset_deg: 0.0, d: 0.10, a: 0.0, alpha_deg: 90.0}
+    link:
+      - {type: cylinder, mass: 0.317, radius: 0.040, length: 0.042, pos: [0.0, 0.0, 0.03], axis: z}   # 모터2
+
+  - name: joint2
+    dh: {theta_offset_deg: 90.0, d: 0.05, a: 0.20, alpha_deg: 0.0}      # a2 = 링크2 길이 (TODO)
+    link:                                                                # frame 2 = 팔꿈치 위치
+      - {type: profile, lin_density: 0.45, side: 0.02, length: 0.20, start: [0.0, 0.0, 0.0], axis: -x}
+      - {type: cylinder, mass: 0.317, radius: 0.040, length: 0.042, pos: [0.0, 0.0, -0.03], axis: z}  # 모터3 (TODO 위치)
+
+  - name: joint3
+    dh: {theta_offset_deg: 0.0, d: 0.0, a: 0.15, alpha_deg: 0.0}        # TODO
+    link:
+      - {type: profile, lin_density: 0.45, side: 0.02, length: 0.15, start: [0.0, 0.0, 0.0], axis: -x}
+      - {type: cylinder, mass: 0.317, radius: 0.040, length: 0.042, pos: [0.0, 0.0, 0.03], axis: z}   # 모터4 (TODO 위치)
+
+  - name: joint4
+    dh: {theta_offset_deg: 0.0, d: 0.0, a: 0.08, alpha_deg: 0.0}        # TODO
+    link:
+      - {type: profile, lin_density: 0.45, side: 0.02, length: 0.08, start: [0.0, 0.0, 0.0], axis: -x}
+      # - {type: point, mass: 0.05, pos: [0.0, 0.0, 0.0]}   # 끝단 (그리퍼 등)
