@@ -1,6 +1,6 @@
 // =============================================================================
 // arm_controller_node.cpp
-//   CyberGear 로봇팔 SMC 제어 ROS2 노드 (초안, N축)
+//   CyberGear 로봇팔 SMC 제어 ROS2 노드 (초안)
 //
 //   구조
 //     ┌ ROS 스레드 (rclcpp::spin) ─────────────┐   ┌ 제어 스레드 (고정 주기) ────────────┐
@@ -35,7 +35,7 @@
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 
-#include "cybergear_arm/dh_dynamics.hpp"
+#include "cybergear_arm/arm_dynamics.hpp"
 #include "cybergear_arm/cybergear_bus.hpp"
 #include "cybergear_arm/sim_transport.hpp"
 #include "cybergear_arm/smc_controller.hpp"
@@ -66,21 +66,19 @@ class ArmControllerNode : public rclcpp::Node {
  public:
   ArmControllerNode() : Node("arm_controller") {
     // ------------------------------------------------------------------
-    // 1) 파라미터 읽기  (config/arm_*dof.yaml 참고)
+    // 1) 파라미터 읽기  (config/arm_2dof.yaml 참고)
     // ------------------------------------------------------------------
     const auto transport = declare_parameter<std::string>("transport", "serial");  // serial|socketcan|sim
     const auto bus_names = declare_parameter<std::vector<std::string>>("buses", {"/dev/ttyUSB0"});
     const auto baud = declare_parameter<int>("baudrate", 921600);
     const auto host_id = declare_parameter<int>("host_id", 0xFD);
-    const auto model_file = declare_parameter<std::string>("model_file", "");
 
     const auto names = declare_parameter<std::vector<std::string>>("joint_names", {"joint1", "joint2"});
-    n_ = names.size();
     const auto ids = declare_parameter<std::vector<int64_t>>("motor_ids", {1, 2});
-    const auto bus_idx = vecParamInt("bus_indices", 0);
-    const auto dirs = vecParam("directions", 1.0);
-    const auto offs = vecParam("offsets", 0.0);
-    const auto tlim = vecParam("torque_limits", 2.0);
+    const auto bus_idx = declare_parameter<std::vector<int64_t>>("bus_indices", {0, 0});
+    const auto dirs = declare_parameter<std::vector<double>>("directions", {1.0, 1.0});
+    const auto offs = declare_parameter<std::vector<double>>("offsets", {0.0, 0.0});
+    const auto tlim = declare_parameter<std::vector<double>>("torque_limits", {2.0, 2.0});
 
     rate_hz_ = declare_parameter<double>("rate_hz", 500.0);
     publish_decimation_ = declare_parameter<int>("publish_decimation", 5);
@@ -89,32 +87,59 @@ class ArmControllerNode : public rclcpp::Node {
     rt_priority_ = declare_parameter<int>("realtime_priority", 80);
 
     // 안전
-    q_min_ = toEigen(vecParam("joint_min", -3.0));
-    q_max_ = toEigen(vecParam("joint_max", 3.0));
+    q_min_ = toEigen(declare_parameter<std::vector<double>>("joint_min", {-2.5, -1.8}));
+    q_max_ = toEigen(declare_parameter<std::vector<double>>("joint_max", {2.5, 1.8}));
     max_vel_ = declare_parameter<double>("max_velocity", 6.0);
     fb_timeout_ = declare_parameter<double>("feedback_timeout", 0.05);
     safe_kd_ = declare_parameter<double>("safe_damping_kd", 1.0);
 
-    // SMC
-    const auto inner = declare_parameter<std::string>("smc.inner_loop", "motor");  // motor | host
-    const bool use_model = declare_parameter<bool>("smc.use_model", true);
+    // SMC 이득
     SmcGains gains;
-    gains.lambda = toEigen(vecParam("smc.lambda", 10.0));
-    gains.k = toEigen(vecParam("smc.k", 0.2));
-    gains.phi = toEigen(vecParam("smc.phi", 0.5));
-    gains.kd = toEigen(vecParam("smc.kd", 0.1));
-    gains.ki = toEigen(vecParam("smc.ki", 0.0));
-    gains.i_max = toEigen(vecParam("smc.i_max", 0.3));
+    gains.lambda = toEigen(declare_parameter<std::vector<double>>("smc.lambda", {15.0, 15.0}));
+    gains.k = toEigen(declare_parameter<std::vector<double>>("smc.k", {0.2, 0.4}));
+    gains.phi = toEigen(declare_parameter<std::vector<double>>("smc.phi", {0.3, 0.3}));
+    gains.kd = toEigen(declare_parameter<std::vector<double>>("smc.kd", {0.2, 0.2}));
+    const bool use_model = declare_parameter<bool>("smc.use_model", true);
+
+    // 동역학 모델 물리 파라미터
+    Arm2DofPhysical p;
+    p.d2 = declare_parameter("model.d2", p.d2);
+    p.motor_mass = declare_parameter("model.motor_mass", p.motor_mass);
+    p.motor_radius = declare_parameter("model.motor_radius", p.motor_radius);
+    p.motor_length = declare_parameter("model.motor_length", p.motor_length);
+    p.motor2_offset = declare_parameter("model.motor2_offset", p.motor2_offset);
+    p.link1_extra_izz = declare_parameter("model.link1_extra_izz", p.link1_extra_izz);
+    p.profile_length = declare_parameter("model.profile_length", p.profile_length);
+    p.profile_start = declare_parameter("model.profile_start", p.profile_start);
+    p.profile_lin_density = declare_parameter("model.profile_lin_density", p.profile_lin_density);
+    p.profile_side = declare_parameter("model.profile_side", p.profile_side);
+    p.bracket2_mass = declare_parameter("model.bracket2_mass", p.bracket2_mass);
+    p.bracket2_pos = declare_parameter("model.bracket2_pos", p.bracket2_pos);
+    p.tip_mass = declare_parameter("model.tip_mass", p.tip_mass);
+    p.tip_pos = declare_parameter("model.tip_pos", p.tip_pos);
+    p.rotor_reflected1 = declare_parameter("model.rotor_reflected1", p.rotor_reflected1);
+    p.rotor_reflected2 = declare_parameter("model.rotor_reflected2", p.rotor_reflected2);
+    p.viscous1 = declare_parameter("model.viscous1", p.viscous1);
+    p.viscous2 = declare_parameter("model.viscous2", p.viscous2);
+    p.coulomb1 = declare_parameter("model.coulomb1", p.coulomb1);
+    p.coulomb2 = declare_parameter("model.coulomb2", p.coulomb2);
 
     // 시뮬레이터 전용
     const double sim_mass_scale = declare_parameter("sim.mass_scale", 1.0);
-    const double sim_delay = declare_parameter("sim.feedback_delay", 0.004);
-    const auto sim_q0 = vecParam("sim.q0", 0.0);
+    const auto sim_q0 = declare_parameter<std::vector<double>>("sim.q0", {0.0, 0.3});
 
     // ------------------------------------------------------------------
     // 2) 관절 설정 만들기
     // ------------------------------------------------------------------
-    if (ids.size() != n_) throw std::runtime_error("motor_ids 길이가 joint_names 와 다름");
+    n_ = names.size();
+    if (ids.size() != n_ || bus_idx.size() != n_ || dirs.size() != n_ || offs.size() != n_ ||
+        tlim.size() != n_) {
+      throw std::runtime_error("joint_names / motor_ids / bus_indices / directions / offsets / "
+                               "torque_limits 길이가 모두 같아야 함");
+    }
+    if (static_cast<size_t>(q_min_.size()) != n_ || static_cast<size_t>(q_max_.size()) != n_)
+      throw std::runtime_error("joint_min / joint_max 길이가 관절 수와 다름");
+    if (n_ != 2) throw std::runtime_error("현재 동역학 모델은 2축 전용 (Arm2DofDynamics)");
 
     std::vector<JointConfig> joints(n_);
     for (size_t i = 0; i < n_; ++i) {
@@ -130,25 +155,11 @@ class ArmControllerNode : public rclcpp::Node {
     // ------------------------------------------------------------------
     // 3) 모델, 제어기
     // ------------------------------------------------------------------
-    if (model_file.empty()) throw std::runtime_error("model_file 파라미터가 비어 있음 (launch 파일 사용)");
-    auto model = std::make_shared<DhDynamics>(loadDhModel(model_file));
-    if (static_cast<size_t>(model->dof()) != n_)
-      throw std::runtime_error("모델 파일의 관절 수(" + std::to_string(model->dof()) +
-                               ")와 joint_names 수가 다름");
-    for (const auto& j : model->model().joints)
-      RCLCPP_INFO(get_logger(), "모델 %s: 링크 질량 %.3f kg, 무게중심 [%.3f %.3f %.3f] m",
-                  j.name.c_str(), j.link.mass, j.link.com.x(), j.link.com.y(), j.link.com.z());
-
-    const InnerLoop mode = (inner == "host") ? InnerLoop::kHost : InnerLoop::kMotor;
-    smc_ = std::make_unique<SmcController>(use_model ? model : nullptr, gains, mode, 1.0 / rate_hz_);
-    use_motor_pd_ = (mode == InnerLoop::kMotor);
-    if (use_motor_pd_) {
-      for (size_t i = 0; i < n_; ++i)
-        RCLCPP_INFO(get_logger(), "%s 모터 내부 PD: kp=%.2f kd=%.3f", names[i].c_str(),
-                    smc_->motorKp()(i), smc_->motorKd()(i));
-    } else {
-      RCLCPP_WARN(get_logger(), "inner_loop=host : 속도 피드백이 USB 지연을 겪음 (채터링 주의)");
-    }
+    auto model = std::make_shared<Arm2DofDynamics>(p);
+    const auto& L = model->lumped();
+    RCLCPP_INFO(get_logger(), "모델: m2=%.3f kg, lc2=%.3f m, It2=%.2e, Izz1=%.2e",
+                L.m2, L.lc2, L.It2, L.Izz1);
+    smc_ = std::make_unique<SmcController>(use_model ? model : nullptr, gains);
 
     // ------------------------------------------------------------------
     // 4) 전송 계층(버스) 생성
@@ -159,13 +170,14 @@ class ArmControllerNode : public rclcpp::Node {
     } else if (transport == "socketcan") {
       for (const auto& b : bus_names) buses.push_back(makeSocketCanTransport(b));
     } else if (transport == "sim") {
-      // 시뮬레이터 = "실제 로봇" 역할. 질량을 일부러 틀리게 해서 모델 오차 실험
-      auto truth = std::make_shared<DhDynamics>(loadDhModel(model_file, sim_mass_scale));
-      for (auto& j : joints) j.bus_index = 0;
-      auto sim = std::make_unique<SimTransport>(truth, joints, toEigen(sim_q0), host_id);
+      Arm2DofPhysical truth = p;  // 시뮬레이터는 "실제 로봇" 역할
+      truth.profile_lin_density *= sim_mass_scale;
+      truth.tip_mass *= sim_mass_scale;
+      auto sim = std::make_unique<SimTransport>(std::make_shared<Arm2DofDynamics>(truth), joints,
+                                                toEigen(sim_q0), host_id);
       sim->setRealtime(true);
-      sim->setFeedbackDelay(sim_delay);
       buses.push_back(std::move(sim));
+      for (auto& j : joints) j.bus_index = 0;
     } else {
       throw std::runtime_error("transport 는 serial / socketcan / sim 중 하나");
     }
@@ -230,21 +242,6 @@ class ArmControllerNode : public rclcpp::Node {
   }
 
  private:
-  // ---------------- 파라미터 도우미 ----------------
-  // 관절 수(n_)만큼의 배열 파라미터. 설정 안 하면 모든 관절에 기본값.
-  std::vector<double> vecParam(const std::string& name, double def) {
-    auto v = declare_parameter<std::vector<double>>(name, std::vector<double>(n_, def));
-    if (v.size() != n_)
-      throw std::runtime_error(name + " 길이(" + std::to_string(v.size()) + ") != 관절 수(" +
-                               std::to_string(n_) + ")");
-    return v;
-  }
-  std::vector<int64_t> vecParamInt(const std::string& name, int64_t def) {
-    auto v = declare_parameter<std::vector<int64_t>>(name, std::vector<int64_t>(n_, def));
-    if (v.size() != n_) throw std::runtime_error(name + " 길이 != 관절 수");
-    return v;
-  }
-
   // ---------------- 기준 궤적 수신 (ROS 스레드) ----------------
   void onReference(const trajectory_msgs::msg::JointTrajectoryPoint& m) {
     if (m.positions.size() != n_) {
@@ -320,12 +317,7 @@ class ArmControllerNode : public rclcpp::Node {
 
       // 4) SMC 계산 + 명령 전송
       const auto out = smc_->compute(q, dq, qd, dqd, ddqd);
-      for (size_t i = 0; i < n_; ++i) {
-        if (use_motor_pd_)  // 선형 피드백은 모터 내부 PD 가 (지연 없이) 처리
-          bus_->sendMotion(i, out.tau(i), out.p_ref(i), out.v_ref(i), out.kp(i), out.kd(i));
-        else
-          bus_->sendTorque(i, out.tau(i));
-      }
+      for (size_t i = 0; i < n_; ++i) bus_->sendTorque(i, out.tau(i));
 
       clock_gettime(CLOCK_MONOTONIC, &after);
       const double compute_ms = diffMs(after, now);
@@ -401,7 +393,6 @@ class ArmControllerNode : public rclcpp::Node {
 
   std::atomic<bool> running_{false};
   bool safe_ = false;
-  bool use_motor_pd_ = true;
   std::thread thread_;
 
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr js_pub_;

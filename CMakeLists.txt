@@ -15,6 +15,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(yaml-cpp REQUIRED)   # sudo apt install libyaml-cpp-dev
 
 # ---- 1) ROS 와 무관한 코어 라이브러리 (프로토콜/버스/모델/제어기) ----
 add_library(cybergear_core
@@ -24,12 +25,13 @@ add_library(cybergear_core
   src/sim_transport.cpp
   src/cybergear_bus.cpp
   src/arm_dynamics.cpp
+  src/dh_dynamics.cpp
   src/smc_controller.cpp
 )
 target_include_directories(cybergear_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(cybergear_core PUBLIC Eigen3::Eigen)
+target_link_libraries(cybergear_core PUBLIC Eigen3::Eigen yaml-cpp::yaml-cpp)
 
 # ---- 2) ROS2 노드 ----
 add_executable(arm_controller src/arm_controller_node.cpp)
@@ -41,8 +43,12 @@ add_executable(protocol_selftest test/protocol_selftest.cpp)
 target_link_libraries(protocol_selftest cybergear_core)
 add_executable(smc_sim_test test/smc_sim_test.cpp)
 target_link_libraries(smc_sim_test cybergear_core)
+add_executable(model_test test/model_test.cpp)
+target_link_libraries(model_test cybergear_core)
+add_executable(chattering_sim_test test/chattering_sim_test.cpp)
+target_link_libraries(chattering_sim_test cybergear_core)
 
-install(TARGETS cybergear_core arm_controller protocol_selftest smc_sim_test
+install(TARGETS cybergear_core arm_controller protocol_selftest smc_sim_test model_test chattering_sim_test
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})

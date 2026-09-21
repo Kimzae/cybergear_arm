@@ -55,7 +55,8 @@ int main() {
   g.k = Eigen::Vector2d(0.3, 0.6);
   g.phi = Eigen::Vector2d(0.2, 0.2);
   g.kd = Eigen::Vector2d(0.3, 0.3);
-  SmcController smc(model, g);
+  // 지연 없는 이상적 조건이므로 HOST 모드로 (모델 기반 SMC 자체의 강인성 확인용)
+  SmcController smc(model, g, InnerLoop::kHost, dt);
 
   Eigen::VectorXd q(2), dq(2), qd(2), dqd(2), ddqd(2);
   double max_err_late = 0.0;

@@ -2,8 +2,9 @@
 
 Xiaomi CyberGear만으로 만드는 **다축 로봇팔 제어 패키지**입니다. (ROS2 Jazzy, C++)
 
-- 여러 모터를 한 주기 안에 동시에 제어 (현재 2축: 모터 ID 1, 2 → 6축까지 확장 예정)
-- 동역학 모델 `M(q)q̈ + C(q,q̇)q̇ + G(q) + F(q̇) = τ` 기반 **슬라이딩 모드 제어(SMC)**
+- 여러 모터를 한 주기 안에 동시에 제어 (2축 / 4축 설정 제공, 6축까지 확장 가능)
+- **DH + 링크 부품 목록(yaml)** 으로 만드는 N축 동역학 모델 `M(q)q̈ + C(q,q̇)q̇ + G(q) + F(q̇) = τ`
+- 슬라이딩 모드 제어(SMC) — 선형 피드백을 **모터 내부 PD로 옮겨 채터링 제거** (`smc.inner_loop: motor`)
 - 하드웨어 없이 돌려볼 수 있는 **시뮬레이터 모드**
 - 기구학 보정 실험용 로그 토픽 (`/arm/debug`)
 
@@ -12,7 +13,7 @@ Xiaomi CyberGear만으로 만드는 **다축 로봇팔 제어 패키지**입니�
 
 ---
 
-## 1. 로봇 구성 (현재 2축)
+## 1. 로봇 구성 (2축 기준)
 
 | 관절 | 모터 ID | 회전축 | 원점 (q = 0) |
 |---|---|---|---|
@@ -34,7 +35,7 @@ DH 파라미터:
 ## 2. 설치
 
 ```bash
-sudo apt install -y libeigen3-dev
+sudo apt install -y libeigen3-dev libyaml-cpp-dev
 cd ~/ros2_ws/src
 git clone https://github.com/Kimzae/cybergear      # 이 패키지가 들어 있는 저장소
 cd ~/ros2_ws
@@ -51,19 +52,32 @@ source install/setup.bash
 ### 단계 1. 오프라인 테스트 (하드웨어 없이)
 
 ```bash
-ros2 run cybergear_arm protocol_selftest   # 통신 프레임이 Python 버전과 같은지 확인
-ros2 run cybergear_arm smc_sim_test        # 모델 오차 30%에서 SMC 추종 성능 확인
+CFG=$(ros2 pkg prefix cybergear_arm)/share/cybergear_arm/config
+ros2 run cybergear_arm protocol_selftest            # 통신 프레임이 Python 버전과 같은지
+ros2 run cybergear_arm model_test $CFG              # 동역학 모델 검증 (2축 해석해 비교, 4축 성질)
+ros2 run cybergear_arm smc_sim_test                 # 지연 없는 이상 조건에서 SMC 강인성
+ros2 run cybergear_arm chattering_sim_test $CFG     # 채터링 재현 + 해결 비교 (4 ms 지연)
 ```
 
-두 번째 테스트는 "실제 로봇"이 모델보다 30% 무겁고, 끝단이 2 cm 더 멀고, 마찰이 있는 상황에서 1 kHz로 사인파를 추종합니다. 개발 환경에서는 최대 오차 약 **0.16°**가 나왔습니다.
+`chattering_sim_test` 결과 (개발 환경, 500 Hz, 피드백 지연 4 ms, 실제 질량 +30%):
+
+| 경우 | 채터링 [Nm] | 최대 오차 [°] |
+|---|---|---|
+| A) HOST, 이전 이득 | 2.17 | 21.3 |
+| B) HOST, φ↑ Kd↓ | 0.11 | 1.2 |
+| **C) MOTOR, 이전 이득** | **0.0013** | **0.05** |
+| D) MOTOR + 조건부 적분 | 0.0013 | 0.26 |
+
+> 시뮬레이터의 모터 내부 PD는 이상적(노이즈·내부 지연 없음)이라 C는 낙관적인 값입니다. 경향을 보는 용도로 쓰세요.
 
 ### 단계 2. 시뮬레이터 모드 (ROS2 전체 흐름 확인)
 
 ```bash
 # 터미널 1
-ros2 launch cybergear_arm arm_2dof.launch.py transport:=sim
+ros2 launch cybergear_arm arm.launch.py dof:=2 transport:=sim
 # 터미널 2
 ros2 run cybergear_arm sine_reference.py --ros-args -p amplitude:="[0.3, 0.3]" -p freq:=0.3
+# (4축이면 amplitude 를 4개로: "[0.2, 0.2, 0.2, 0.2]")
 # 터미널 3
 ros2 topic echo /arm/joint_states
 ```
@@ -73,15 +87,29 @@ ros2 topic echo /arm/joint_states
 체크리스트:
 - [ ] 로봇팔을 **손으로 받칠 수 있는 자세**에서 시작
 - [ ] `config/arm_2dof.yaml`의 `torque_limits`를 작게 (예: 1.0)
+- [ ] `config/model_2dof.yaml`의 치수·질량을 실측값으로 수정
 - [ ] `directions` 확인: 모터 +방향이 DH 축 방향과 같은가? (아래 5절 참고)
-- [ ] 모델 치수 값(`model.*`)을 실측값으로 수정
 
 ```bash
-ros2 launch cybergear_arm arm_2dof.launch.py          # 시작하면 "현재 자세"를 유지
+ros2 launch cybergear_arm arm.launch.py dof:=2        # 시작하면 "현재 자세"를 유지
 ros2 run cybergear_arm sine_reference.py --ros-args -p amplitude:="[0.1, 0.1]"
 ```
 
 > ⚠️ 노드를 종료하면 약 0.5초 동안 댐핑을 건 뒤 모터를 풀어 줍니다. **팔이 중력 때문에 내려오니** 받쳐 주세요.
+
+## 3.5 4축으로 확장하기
+
+1. **모터 ID 설정:** 새 모터 2개를 ID 3, 4로 설정하고 `cybergear_scan.py`로 확인합니다. 같은 버스에 같은 ID가 두 개 있으면 안 됩니다.
+2. **대역폭 확인:** CH340 어댑터 1개 + 모터 4개는 **500 Hz까지** 가능합니다. 이때 CAN 버스 부하는 약 56%입니다. 1 kHz가 필요하면 어댑터를 2개로 나누세요 (`buses`, `bus_indices`).
+3. **모델 작성:** `config/model_4dof.yaml`은 "평면 팔꿈치 + 손목" **예시**입니다. 실제 관절 3, 4의 DH와 부품 위치로 바꾸세요.
+   - 관절 3이 생기면 보통 a₂ = 링크2 길이로 둡니다 (frame 2를 팔꿈치로 옮김).
+4. **검증 → 시뮬레이터 → 실제** 순서로 진행합니다.
+   ```bash
+   ros2 run cybergear_arm model_test $CFG                    # 모델 파일 문법·성질 확인
+   ros2 launch cybergear_arm arm.launch.py dof:=4 transport:=sim
+   ros2 launch cybergear_arm arm.launch.py dof:=4            # 실제 (받칠 준비!)
+   ```
+5. **한 관절씩 켜기 권장:** 처음에는 새 관절의 `torque_limits`를 0.5 정도로 작게 두고, `directions`부터 확인하세요.
 
 ---
 
@@ -101,7 +129,7 @@ ros2 run cybergear_arm sine_reference.py --ros-args -p amplitude:="[0.1, 0.1]"
 
 ---
 
-## 5. 주요 파라미터 (`config/arm_2dof.yaml`)
+## 5. 주요 파라미터 (`config/arm_Ndof.yaml`)
 
 | 그룹 | 파라미터 | 설명 |
 |---|---|---|
@@ -112,9 +140,11 @@ ros2 run cybergear_arm sine_reference.py --ros-args -p amplitude:="[0.1, 0.1]"
 | | `torque_limits` | 관절별 최대 토크 [Nm] |
 | 루프 | `rate_hz` | 제어 주기 (CH340 1개 + 모터 2개 → 500 Hz 권장) |
 | 안전 | `joint_min/max`, `max_velocity`, `feedback_timeout` | 넘으면 **SAFE 모드**(댐핑만 유지, 재시작 필요) |
-| SMC | `smc.lambda`, `smc.k`, `smc.phi`, `smc.kd` | [ARCHITECTURE.md](ARCHITECTURE.md) 4절 참고 |
+| SMC | `smc.inner_loop` | `motor`(권장) / `host`. [ARCHITECTURE.md](ARCHITECTURE.md) 4절 |
+| | `smc.lambda`, `smc.k`, `smc.phi`, `smc.kd` | 모터 내부 PD: `kd_int = kd + k/phi`, `kp_int = lambda·kd_int` |
+| | `smc.ki`, `smc.i_max` | 조건부 적분 (기본 0. 정지 자세 정상상태 오차가 보일 때만) |
 | | `smc.use_model` | `false`면 모델 없이 동작 (모델 효과 비교 실험용) |
-| 모델 | `model.*` | 링크 길이·질량 등. **"측정 필요" 표시된 값은 반드시 실측** |
+| 모델 | `config/model_Ndof.yaml` | DH + 링크 부품(모터 원통, 프로파일, 점질량). **"측정 필요" 값은 실측** |
 
 **`directions` 확인 방법:** 노드를 켜지 않은 상태에서 `cybergear_test`(Python 패키지)로 +0.2 Nm를 줍니다.
 - joint1: 위에서 봤을 때 **반시계**로 돌면 `+1`
@@ -141,14 +171,17 @@ echo "$USER - memlock unlimited" | sudo tee -a /etc/security/limits.d/99-realtim
 ```
 cybergear_arm/
 ├── CMakeLists.txt, package.xml
-├── config/arm_2dof.yaml              설정
-├── launch/arm_2dof.launch.py         실행 파일
+├── config/
+│   ├── arm_2dof.yaml, arm_4dof.yaml      제어기 설정
+│   └── model_2dof.yaml, model_4dof.yaml  동역학 모델 (DH + 링크 부품)
+├── launch/arm.launch.py              실행 파일 (dof:=2|4)
 ├── include/cybergear_arm/
 │   ├── cybergear_protocol.hpp        프레임 인코딩/디코딩
 │   ├── can_transport.hpp             전송 계층 인터페이스
 │   ├── sim_transport.hpp             시뮬레이터 전송 계층
 │   ├── cybergear_bus.hpp             다축 동시 제어 (관절 ↔ 모터)
-│   ├── arm_dynamics.hpp              동역학 모델 (2축 해석해)
+│   ├── arm_dynamics.hpp              동역학 인터페이스 + 2축 해석해 (검증용)
+│   ├── dh_dynamics.hpp               N축 범용 동역학 (DH + yaml)
 │   └── smc_controller.hpp            슬라이딩 모드 제어기
 ├── src/                              위 헤더의 구현 + arm_controller_node.cpp
 │   ├── serial_at_transport.cpp       CH340 'AT' 시리얼

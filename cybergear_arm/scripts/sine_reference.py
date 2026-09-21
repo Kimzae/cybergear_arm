@@ -36,10 +36,6 @@ class SineReference(Node):
     def on_js(self, msg):
         if self.center is None:
             self.center = list(msg.position)
-            n = len(self.center)
-            if len(self.A) != n:  # 관절 수와 다르면 0으로 채우거나 잘라냄
-                self.get_logger().warn(f'amplitude 길이 {len(self.A)} != 관절 수 {n} -> 맞춤')
-                self.A = (self.A + [0.0] * n)[:n]
             self.t0 = self.get_clock().now()
             self.get_logger().info(f'중심 자세 = {[round(c, 3) for c in self.center]}')
 

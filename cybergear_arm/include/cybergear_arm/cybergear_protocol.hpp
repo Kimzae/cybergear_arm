@@ -26,8 +26,7 @@ enum CommType : uint8_t {
 };
 
 // ---- 파라미터 인덱스 -------------------------------------------------------
-constexpr uint16_t kParamRunMode = 0x7005;      // 0:운동제어 1:위치 2:속도 3:전류
-constexpr uint16_t kParamLimitTorque = 0x700B;  // 토크 제한 [Nm] (float)
+constexpr uint16_t kParamRunMode = 0x7005;  // 0:운동제어 1:위치 2:속도 3:전류
 
 // ---- 값 범위 (매뉴얼 기준) -------------------------------------------------
 constexpr double kPi = 3.14159265358979323846;

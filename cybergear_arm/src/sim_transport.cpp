@@ -4,7 +4,6 @@
 #include "cybergear_arm/sim_transport.hpp"
 
 #include <algorithm>
-#include <cstring>
 
 namespace cybergear {
 
@@ -34,15 +33,6 @@ bool SimTransport::send(const CanFrame& f) {
         c.replied = false;
         break;
       }
-      case kWriteParam: {
-        const uint16_t idx = uint16_t(f.data[0] | (f.data[1] << 8));
-        if (idx == kParamLimitTorque) {
-          float v;
-          std::memcpy(&v, &f.data[4], 4);
-          c.limit = std::clamp(static_cast<double>(v), 0.0, kTorMax);
-        }
-        break;
-      }
       default: break;
     }
   }
@@ -64,21 +54,14 @@ void SimTransport::step(double dt) {
       const double pm = (q_(i) - j.offset) * j.direction;
       const double vm = dq_(i) * j.direction;
       double tm = c.enabled ? c.kp * (c.p - pm) + c.kd * (c.v - vm) + c.t_ff : 0.0;
-      tm = std::clamp(tm, -c.limit, c.limit);
+      tm = std::clamp(tm, kTorMin, kTorMax);
       tau(i) = j.direction * tm;
     }
-    tau_applied_ = tau;
     model_->compute(q_, dq_, M, C, G, F);
     const Eigen::VectorXd ddq = M.ldlt().solve(tau - C * dq_ - G - F);
     dq_ += h * ddq;  // semi-implicit Euler
     q_ += h * dq_;
-    t_ += h;
   }
-  hist_.push_back({t_, q_, dq_});
-  // 지연 시간보다 오래된 기록은 버림 (하나는 남김)
-  size_t drop = 0;
-  while (drop + 1 < hist_.size() && hist_[drop + 1].t <= t_ - delay_) ++drop;
-  if (drop) hist_.erase(hist_.begin(), hist_.begin() + static_cast<long>(drop));
 }
 
 void SimTransport::receive(std::vector<CanFrame>& out) {
@@ -88,11 +71,6 @@ void SimTransport::receive(std::vector<CanFrame>& out) {
     last_ = now;
     if (dt > 0 && dt < 0.1) step(dt);
   }
-  // PC 에 보여줄 상태: delay_ 만큼 과거
-  const Eigen::VectorXd* qs = &q_;
-  const Eigen::VectorXd* dqs = &dq_;
-  if (delay_ > 0 && !hist_.empty()) { qs = &hist_.front().q; dqs = &hist_.front().dq; }
-
   // 명령을 받은 모터마다 피드백 1개 (실제 CyberGear 동작과 같음)
   for (size_t i = 0; i < joints_.size(); ++i) {
     auto& c = cmd_[i];
@@ -102,8 +80,8 @@ void SimTransport::receive(std::vector<CanFrame>& out) {
     CanFrame f;
     f.id = (uint32_t(kFeedback) << 24) | (uint32_t(c.enabled ? 2 : 0) << 22) |
            (uint32_t(j.motor_id) << 8) | host_id_;
-    const double pm = ((*qs)(i) - j.offset) * j.direction;
-    const double vm = (*dqs)(i) * j.direction;
+    const double pm = (q_(i) - j.offset) * j.direction;
+    const double vm = dq_(i) * j.direction;
     auto put = [&](int k, uint16_t v) { f.data[k] = v >> 8; f.data[k + 1] = v & 0xFF; };
     put(0, floatToUint16(pm, kPosMin, kPosMax));
     put(2, floatToUint16(vm, kVelMin, kVelMax));

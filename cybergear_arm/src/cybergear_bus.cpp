@@ -33,11 +33,6 @@ void CyberGearBus::startAll() {
   for (size_t i = 0; i < size(); ++i)
     sendRaw(i, makeWriteParamU8(joints_[i].motor_id, host_id_, kParamRunMode, 0));
   std::this_thread::sleep_for(20ms);
-  // 모터 자체 토크 제한 (모터 내부 PD 토크까지 포함해 전체를 제한)
-  for (size_t i = 0; i < size(); ++i)
-    sendRaw(i, makeWriteParamFloat(joints_[i].motor_id, host_id_, kParamLimitTorque,
-                                   static_cast<float>(joints_[i].torque_limit)));
-  std::this_thread::sleep_for(20ms);
   for (size_t i = 0; i < size(); ++i) sendRaw(i, makeEnable(joints_[i].motor_id, host_id_));
   std::this_thread::sleep_for(20ms);
   poll();
@@ -54,17 +49,6 @@ void CyberGearBus::sendTorque(size_t i, double tau_joint, double kd) {
   const double tau = std::clamp(tau_joint, -j.torque_limit, j.torque_limit);
   // 관절 좌표 -> 모터 좌표 (방향만 바뀜. 오프셋은 토크와 무관)
   sendRaw(i, makeMotion(j.motor_id, j.direction * tau, 0.0, 0.0, 0.0, kd));
-}
-
-void CyberGearBus::sendMotion(size_t i, double tau_ff, double p_ref, double v_ref, double kp,
-                              double kd) {
-  const auto& j = joints_[i];
-  const double tau = std::clamp(tau_ff, -j.torque_limit, j.torque_limit);
-  // 관절 -> 모터 좌표:  q_motor = (q_joint − offset) * dir   (dir = ±1 이므로 1/dir = dir)
-  const double p_m = (p_ref - j.offset) * j.direction;
-  const double v_m = v_ref * j.direction;
-  // kp, kd 는 부호 반전에 대해 불변 (양쪽 오차가 같이 뒤집힘)
-  sendRaw(i, makeMotion(j.motor_id, j.direction * tau, p_m, v_m, kp, kd));
 }
 
 void CyberGearBus::sendDamping(size_t i, double kd) {

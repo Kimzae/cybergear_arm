@@ -12,6 +12,7 @@
 #pragma once
 
 #include <chrono>
+#include <deque>
 #include <memory>
 #include <vector>
 
@@ -39,12 +40,20 @@ class SimTransport : public CanTransport {
   // true 면 receive() 가 실제 경과 시간만큼 자동으로 step() 한다 (ROS 노드용)
   void setRealtime(bool on) { realtime_ = on; }
 
+  // 피드백 지연 [s]: PC 가 받는 상태가 이만큼 과거의 것 (USB/어댑터 지연 흉내)
+  //   모터 내부 PD 는 지연 없는 현재 상태를 쓴다 — 실제 CyberGear 와 같은 구조
+  void setFeedbackDelay(double sec) { delay_ = sec; }
+
   const Eigen::VectorXd& q() const { return q_; }
+  double time() const { return t_; }
+  // 마지막 적분 스텝에서 모터가 실제로 낸 토크 (관절 좌표, 모터 내부 PD 포함)
+  const Eigen::VectorXd& appliedTorque() const { return tau_applied_; }
 
  private:
   struct MotorCmd {
     bool enabled = false;
     double t_ff = 0, p = 0, v = 0, kp = 0, kd = 0;
+    double limit = 12.0;  // limit_torque 파라미터
     bool replied = true;  // 명령을 받으면 false -> 다음 receive 때 피드백 1개 응답
   };
 
@@ -54,6 +63,11 @@ class SimTransport : public CanTransport {
   Eigen::VectorXd q_, dq_;
   std::vector<MotorCmd> cmd_;
   bool realtime_ = false;
+  double delay_ = 0.0;
+  double t_ = 0.0;  // 시뮬레이션 시각
+  Eigen::VectorXd tau_applied_;
+  struct Snap { double t; Eigen::VectorXd q, dq; };
+  std::vector<Snap> hist_;  // 지연 구현용 과거 상태 기록
   std::chrono::steady_clock::time_point last_{std::chrono::steady_clock::now()};
 };
 

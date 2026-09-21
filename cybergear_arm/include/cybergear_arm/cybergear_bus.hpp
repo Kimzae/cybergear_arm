@@ -62,12 +62,6 @@ class CyberGearBus {
   // 관절 i 에 토크 명령 (관절 좌표, 제한 적용).  kd>0 이면 모터 내부 댐핑 추가.
   void sendTorque(size_t i, double tau_joint, double kd = 0.0);
 
-  // 관절 i 에 운동제어 명령 (관절 좌표). 모터 내부에서
-  //   kp(p_ref − q) + kd(v_ref − q̇) + tau_ff
-  // 를 계산한다. tau_ff 에만 torque_limit 이 적용되고,
-  // 전체 토크는 startAll() 에서 모터에 설정한 limit_torque 로 제한된다.
-  void sendMotion(size_t i, double tau_ff, double p_ref, double v_ref, double kp, double kd);
-
   // 비상용 "댐핑 모드": 토크 0 + 모터 내부 Kd. 팔이 천천히 내려오게 한다.
   void sendDamping(size_t i, double kd);
 
